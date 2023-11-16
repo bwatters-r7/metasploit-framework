@@ -52,6 +52,3 @@ group :test do
   # Manipulate Time.now in specs
   gem 'timecop'
 end
-
-# remove me once https://github.com/rapid7/ruby_smb/pull/256 is landed 
-gem 'ruby_smb', git: 'https://github.com/zeroSteiner/ruby_smb.git', branch: 'feat/server/provider-hooks'
