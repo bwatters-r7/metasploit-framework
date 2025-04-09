@@ -63,72 +63,112 @@ class MetasploitModule < Msf::Post
   end
 
   def check_hardening
-    if aslr_enabled?
-      r = 'ASLR is enabled'
-      print_good r
-      report r
-    end
-
-    if exec_shield_enabled?
-      r = 'Exec-Shield is enabled'
-      print_good r
-      report r
-    end
-
-    if kaiser_enabled?
-      r = 'KAISER is enabled'
-      print_good r
-      report r
-    end
-
-    if smep_enabled?
-      r = 'SMEP is enabled'
-      print_good r
-      report r
-    end
-
-    if smap_enabled?
-      r = 'SMAP is enabled'
-      print_good r
-      report r
-    end
-
-    if lkrg_installed?
-      r = 'LKRG is installed'
-      print_good r
-      report r
-    end
-
-    if grsec_installed?
-      r = 'grsecurity is installed'
-      print_good r
-      report r
-    end
-
-    if pax_installed?
-      r = 'PaX is installed'
-      print_good r
-      report r
-    end
-
-    if selinux_installed?
-      if selinux_enforcing?
-        r = 'SELinux is installed and enforcing'
-      else
-        r = 'SELinux is installed, but in permissive mode'
+    begin
+      if aslr_enabled?
+        r = 'ASLR is enabled'
+        print_good r
+        report r
       end
-      print_good r
-      report r
+    rescue RuntimeError => e
+      vprint_status("#{e}")
     end
 
-    if yama_installed?
-      if yama_enabled?
-        r = 'Yama is installed and enabled'
-      else
-        r = 'Yama is installed, but not enabled'
+    begin
+      if exec_shield_enabled?
+        r = 'Exec-Shield is enabled'
+        print_good r
+        report r
       end
-      print_good r
-      report r
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if kaiser_enabled?
+        r = 'KAISER is enabled'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if smep_enabled?
+        r = 'SMEP is enabled'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if smap_enabled?
+        r = 'SMAP is enabled'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if lkrg_installed?
+        r = 'LKRG is installed'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if grsec_installed?
+        r = 'grsecurity is installed'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if pax_installed?
+        r = 'PaX is installed'
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if selinux_installed?
+        if selinux_enforcing?
+          r = 'SELinux is installed and enforcing'
+        else
+          r = 'SELinux is installed, but in permissive mode'
+        end
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
+    end
+
+    begin
+      if yama_installed?
+        if yama_enabled?
+          r = 'Yama is installed and enabled'
+        else
+          r = 'Yama is installed, but not enabled'
+        end
+        print_good r
+        report r
+      end
+    rescue RuntimeError => e
+      vprint_status("#{e}")
     end
   end
 
@@ -252,10 +292,13 @@ class MetasploitModule < Msf::Post
     }
 
     apps.each do |path, appname|
-      next unless file_exists?(path) || directory?(path)
+      next unless file_exist?(path) || directory?(path)
 
       print_good "#{appname} found: #{path}"
       report "#{appname}: #{path}"
+    rescue RuntimeError
+      print_bad("Unable to determine state of #{appname}")
+      continue
     end
   end
 end
