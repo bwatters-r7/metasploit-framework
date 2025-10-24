@@ -18,7 +18,7 @@ module Msf
       datastore['FetchHttpServerName']
     end
 
-    def add_resource(fetch_service, uri, srvexe)
+    def add_resource(fetch_service, uri, opts)
       vprint_status("Adding resource #{uri}")
       begin
         if fetch_service.resources.include?(uri)
@@ -27,7 +27,7 @@ module Msf
         end
         fetch_service.add_resource(uri,
                                    'Proc' => proc do |cli, req|
-                                     on_request_uri(cli, req, srvexe)
+                                     on_request_uri(cli, req, opts)
                                    end,
                                    'VirtualDirectory' => true)
       rescue ::Exception => e
@@ -60,14 +60,21 @@ module Msf
       fetch_service
     end
 
-    def on_request_uri(cli, request, srvexe)
+    def on_request_uri(cli, request, opts)
       client = cli.peerhost
       vprint_status("Client #{client} requested #{request.uri}")
       if (user_agent = request.headers['User-Agent'])
         client += " (#{user_agent})"
       end
       vprint_status("Sending payload to #{client}")
-      cli.send_response(payload_response(srvexe))
+      arch = to_meterp_arch(request.uri_parts['QueryString']['arch'])
+      vprint_status("Building payload for #{arch} arch")
+      opts[:arch] = arch
+      vprint_status("1")
+      @multi_arch = arch
+      vprint_status("2")
+      opts[:code] = super(opts)
+      cli.send_response(payload_response(generate_payload_exe(opts)))
     end
 
     def payload_response(srvexe)

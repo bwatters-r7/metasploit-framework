@@ -73,6 +73,44 @@ module Msf
     end
   end
 
+  def to_meterp_arch(os_arch)
+    # multiple `uname -m` values map to the same payload arch
+    # we will probably need to expand this
+    vprint_status("Searching for #{os_arch}")
+    case os_arch
+    when 'aarch64'
+      return ARCH_AARCH64
+    when 'armbe'
+      return ARCH_ARMBE
+    when 'armv5l'
+      return ARCH_ARMLE
+    when 'armv6l'
+      return ARCH_ARMLE
+    when 'armv7l'
+      return ARCH_ARMLE
+    when 'mips64'
+      return ARCH_MIPS64
+    when 'mipsbe'
+    return ARCH_MIPSBE
+    when 'mips'
+      return ARCH_MIPSLE
+    when 'ppc'
+      return ARCH_PPC
+    when 'ppce500v2'
+      return ARCH_PPCE500V2
+    when 'ppc64le'
+      return ARCH_PPC64LE
+    when 'x64'
+      return ARCH_X64
+    when 'x86_64'
+      return ARCH_X64
+    when 'x86'
+      return ARCH_X86
+    when 'zarch'
+      return ARCH_ZARCH
+    vprint_status('Nothing Found')
+    end
+  end
   def multi_arches
     arches = []
     arches << ARCH_AARCH64
