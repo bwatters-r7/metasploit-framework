@@ -40,6 +40,60 @@ RSpec.describe Msf::Post::File do
       subject.mkdir(path, cleanup: false)
       expect(subject).not_to have_received(:register_dir_for_cleanup)
     end
+
+    context 'with a Meterpreter session' do
+      let(:remote_dir) { double('dir') }
+      let(:remote_file) { double('file', separator: separator) }
+      let(:remote_fs) { double('fs', dir: remote_dir, file: remote_file) }
+
+      before(:each) do
+        stub_const('Rex::Post::Meterpreter::RequestError', Class.new(StandardError))
+        first_path_attempt = true
+        allow(remote_dir).to receive(:mkdir) do |directory|
+          if first_path_attempt && directory == path
+            first_path_attempt = false
+            raise Rex::Post::Meterpreter::RequestError, 'Parent directory does not exist'
+          end
+
+          0
+        end
+        subject.session = double('session', type: 'meterpreter', platform: platform, fs: remote_fs)
+      end
+
+      context 'on Windows' do
+        let(:path) { 'base\\parent\\child' }
+        let(:platform) { 'windows' }
+        let(:separator) { '\\' }
+
+        before(:each) do
+          allow(subject).to receive(:directory?) { |directory| ['base'].include?(directory) }
+        end
+
+        it 'creates missing parent directories' do
+          subject.mkdir(path)
+
+          expect(remote_dir).to have_received(:mkdir).with('base\\parent')
+          expect(remote_dir).to have_received(:mkdir).with(path).twice
+        end
+      end
+
+      context 'on Unix' do
+        let(:path) { 'base/parent/child' }
+        let(:platform) { 'linux' }
+        let(:separator) { '/' }
+
+        before(:each) do
+          allow(subject).to receive(:directory?) { |directory| ['base'].include?(directory) }
+        end
+
+        it 'creates missing parent directories' do
+          subject.mkdir(path)
+
+          expect(remote_dir).to have_received(:mkdir).with('base/parent')
+          expect(remote_dir).to have_received(:mkdir).with(path).twice
+        end
+      end
+    end
   end
 
   describe '#_can_echo?' do

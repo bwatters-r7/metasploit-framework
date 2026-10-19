@@ -122,8 +122,15 @@ module Msf::Post::File
     result = nil
     vprint_status("Creating directory #{path}")
     if session.type == 'meterpreter'
-      # behave like mkdir -p and don't throw an error if the directory exists
-      result = session.fs.dir.mkdir(path) unless directory?(path)
+      # New Meterpreters create parent directories server-side. Fall back to
+      # component creation for older implementations that reject nested paths.
+      unless directory?(path)
+        result = begin
+          session.fs.dir.mkdir(path)
+        rescue ::Rex::Post::Meterpreter::RequestError
+          _meterpreter_mkdir(path)
+        end
+      end
     elsif session.type == 'powershell'
       result = cmd_exec("New-Item \"#{path}\" -itemtype directory")
     elsif session.platform == 'windows'
@@ -908,6 +915,36 @@ module Msf::Post::File
   end
 
 protected
+
+  # Creates a directory tree through Meterpreter.
+  #
+  # @param path [String] Remote directory path
+  # @return [Integer, nil] the result of creating the final directory, or nil if it exists
+  def _meterpreter_mkdir(path)
+    separator = session.fs.file.separator
+    normalized_path = separator == '\\' ? path.tr('/', separator) : path
+    directories = normalized_path.split(separator).reject(&:empty?)
+    current_path = ''
+
+    if separator == '\\' && normalized_path.start_with?(separator * 2) && directories.length >= 2
+      current_path = "#{separator * 2}#{directories.shift}#{separator}#{directories.shift}"
+    elsif normalized_path.start_with?(separator)
+      current_path = separator
+    elsif separator == '\\' && directories.first&.match?(/\A[A-Za-z]:\z/)
+      current_path = "#{directories.shift}#{separator}"
+    end
+
+    return session.fs.dir.mkdir(normalized_path) if directories.empty?
+
+    result = nil
+    directories.each do |directory|
+      current_path += separator unless current_path.empty? || current_path.end_with?(separator)
+      current_path += directory
+      result = session.fs.dir.mkdir(current_path) unless directory?(current_path)
+    end
+
+    result
+  end
 
   # Checks to see if there are non-printable characters in a given string
   #
